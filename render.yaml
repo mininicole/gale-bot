@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: gale-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: API_BASE_URL
+        sync: false
+      - key: API_MODEL
+        sync: false
+      - key: MINIMAX_API_KEY
+        sync: false
+      - key: MINIMAX_GROUP_ID
+        sync: false
+      - key: MINIMAX_EN_VOICE_ID
+        sync: false
+      - key: MINIMAX_CN_VOICE_ID
+        sync: false
