@@ -302,7 +302,7 @@ async function chatReply(userMsg, isGroup = false) {
 
 async function tgPoll() {
   if (!TG_TOKEN || !CHAT_ID || !API_KEY) return;
-  const BOT_USERNAME = process.env.BOT_USERNAME || '@gale_nn_bot';
+  const BOT_USERNAME = process.env.BOT_USERNAME || '@Galefornicole_bot';
   try {
     const res = await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&timeout=30`);
     const data = await res.json();
