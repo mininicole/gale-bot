@@ -9,7 +9,7 @@ const TG_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const API_KEY = process.env.API_KEY;
 const API_BASE = (process.env.API_BASE_URL || 'https://api.dzzi.ai').replace(/\/+$/, '');
-const API_MODEL = process.env.API_MODEL || 'gpt-4.1';
+const API_MODEL = process.env.API_MODEL || '[按量]gpt-4.1';
 const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
 let tgOffset = 0;
 
