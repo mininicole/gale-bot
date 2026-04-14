@@ -1,0 +1,29 @@
+name: Gale Heartbeat
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests edge-tts
+      - name: Run heartbeat
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          API_KEY: ${{ secrets.API_KEY }}
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          API_MODEL: ${{ secrets.API_MODEL }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          STATE_GIST_URL: ${{ secrets.STATE_GIST_URL }}
+          SYSTEM_PROMPT: ${{ secrets.SYSTEM_PROMPT }}
+        run: python trigger.py
