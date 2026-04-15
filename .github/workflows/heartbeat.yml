@@ -27,3 +27,5 @@ jobs:
           STATE_GIST_URL: ${{ secrets.STATE_GIST_URL }}
           SYSTEM_PROMPT: ${{ secrets.SYSTEM_PROMPT }}
         run: python trigger.py
+      - name: Keep Render Alive
+        run: curl -s https://gale-bot.onrender.com/health || true
