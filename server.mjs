@@ -314,14 +314,14 @@ async function tgPoll() {
 
         const isPrivate = msg.chat.type === 'private' && msg.chat.id === Number(CHAT_ID);
         const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
-        const isMentioned = msg.text.includes(BOT_USERNAME);
+        const isMentioned = msg.text.toLowerCase().includes(BOT_USERNAME.toLowerCase());
 
         if (isPrivate || (isGroup && isMentioned)) {
           processed.add(msg.message_id);
           if (processed.size > 100) {
             const arr = [...processed]; arr.splice(0, 50); processed.clear(); arr.forEach(id => processed.add(id));
           }
-          const cleanText = isGroup ? msg.text.replace(BOT_USERNAME, '').trim() : msg.text;
+          const cleanText = isGroup ? msg.text.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : msg.text;
           const sender = msg.from ? (msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '')) : 'Unknown';
           const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
           const reply = await chatReply(cleanMsg, isGroup);
