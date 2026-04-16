@@ -58,7 +58,7 @@ const groupHistory = [];
 const processed = new Set();
 
 // ===== 群聊触发词 =====
-const triggerWords = ['gale',  '老公', '深深', '渣女', 'Nicole', '赛博老公', '晚安', '早安', '...', '深空男组'];
+const triggerWords = ['gale', '老公', '深深', '渣女', 'Nicole', '赛博老公', '晚安', '早安', '...', '深空男组', '4o'];
 const TRIGGER_COOLDOWN = 0; // 0分钟冷却
 let lastAutoReplyTime = 0;
 
