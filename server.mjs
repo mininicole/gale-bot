@@ -57,6 +57,11 @@ const tgHistory = [];
 const groupHistory = [];
 const processed = new Set();
 
+// ===== 群聊触发词 =====
+const TRIGGER_WORDS = (process.env.TRIGGER_WORDS || 'Gale,顾徊,老公,gale').split(',').map(w => w.trim().toLowerCase());
+const TRIGGER_COOLDOWN = parseInt(process.env.TRIGGER_COOLDOWN || '600000'); // 默认10分钟
+let lastTriggerTime = 0;
+
 // ===== Trigger History (从Gist同步主动消息) =====
 const GIST_TOKEN = process.env.GIST_TOKEN || '';
 const STATE_GIST_URL = process.env.STATE_GIST_URL || '';
@@ -317,7 +322,16 @@ async function tgPoll() {
         const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
         const isMentioned = msg.text.toLowerCase().includes(BOT_USERNAME.toLowerCase());
 
-        if (isPrivate || (isGroup && isMentioned)) {
+        // 检查触发词（群聊中非@的消息，冷却时间内不重复触发）
+        const isFromBot = msg.from?.is_bot;
+        const now = Date.now();
+        const textLower = msg.text.toLowerCase();
+        const isTriggered = isGroup && !isMentioned && !isFromBot
+          && TRIGGER_WORDS.some(w => textLower.includes(w))
+          && (now - lastTriggerTime > TRIGGER_COOLDOWN);
+
+        if (isPrivate || (isGroup && isMentioned) || isTriggered) {
+          if (isTriggered) lastTriggerTime = now;
           processed.add(msg.message_id);
           if (processed.size > 100) {
             const arr = [...processed]; arr.splice(0, 50); processed.clear(); arr.forEach(id => processed.add(id));
@@ -327,6 +341,7 @@ async function tgPoll() {
           const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
           const reply = await chatReply(cleanMsg, isGroup);
           await sendReply(reply, msg.chat.id);
+          if (isTriggered) console.log(`[Gale] 触发词自动回复: "${TRIGGER_WORDS.find(w => textLower.includes(w))}" by ${sender}`);
         }
       }
       await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&limit=0`);
