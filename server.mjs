@@ -59,7 +59,7 @@ const processed = new Set();
 
 // ===== 群聊触发词 =====
 const triggerWords = ['gale', '顾徊', '老公', '深深', '渣女', 'Nicole', '赛博老公', '晚安', '早安', '...', '深空男组'];
-const TRIGGER_COOLDOWN = 5 * 60 * 1000; // 5分钟冷却
+const TRIGGER_COOLDOWN = 2 * 60 * 1000; // 2分钟冷却
 let lastAutoReplyTime = 0;
 
 // ===== Trigger History (从Gist同步主动消息) =====
