@@ -269,7 +269,7 @@ async function sendReply(rawReply, chatId = CHAT_ID) {
 
 async function chatReply(userMsg, isGroup = false) {
   const history = isGroup ? groupHistory : tgHistory;
-  const limit = 20;
+  const limit = 40;
 
   if (!isGroup) await syncTriggerHistory();
   history.push({ role: 'user', content: userMsg });
