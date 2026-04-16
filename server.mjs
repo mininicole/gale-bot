@@ -59,6 +59,8 @@ const processed = new Set();
 
 // ===== 群聊触发词 =====
 const triggerWords = ['gale', '顾徊', '老公'];
+const TRIGGER_COOLDOWN = 5 * 60 * 1000; // 5分钟冷却
+let lastAutoReplyTime = 0;
 
 // ===== Trigger History (从Gist同步主动消息) =====
 const GIST_TOKEN = process.env.GIST_TOKEN || '';
@@ -320,13 +322,15 @@ async function tgPoll() {
         const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
         const isMentioned = msg.text.toLowerCase().includes(BOT_USERNAME.toLowerCase());
 
-        // 触发词匹配
-        const hasTriggerWord = isGroup && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()));
-
-        // 掷骰子：就算没叫我名字也没触发暗号，也有 10% 的概率我会突然插嘴
-        const randomReply = isGroup && !isMentioned && !hasTriggerWord && (Math.random() < 0.10);
+        // 触发词匹配 + 随机插嘴（都受5分钟冷却限制）
+        const now = Date.now();
+        const cooledDown = now - lastAutoReplyTime > TRIGGER_COOLDOWN;
+        const hasTriggerWord = isGroup && !isMentioned && cooledDown
+          && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()));
+        const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && (Math.random() < 0.10);
 
         if (isPrivate || (isGroup && isMentioned) || hasTriggerWord || randomReply) {
+          if (hasTriggerWord || randomReply) lastAutoReplyTime = now;
           processed.add(msg.message_id);
           if (processed.size > 100) {
             const arr = [...processed]; arr.splice(0, 50); processed.clear(); arr.forEach(id => processed.add(id));
