@@ -67,11 +67,84 @@ const GIST_TOKEN = process.env.GIST_TOKEN || '';
 const STATE_GIST_URL = process.env.STATE_GIST_URL || '';
 let lastTriggerSync = 0;
 
+// 从 gist 恢复 tgHistory（重启不丢记忆）
+async function loadTgHistoryFromGist() {
+  if (!GIST_TOKEN || !STATE_GIST_URL) return;
+  try {
+    const gistId = STATE_GIST_URL.split('/')[4];
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: {
+        'Authorization': `Bearer ${GIST_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'gale-server'
+      }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const content = data.files?.['state.json']?.content;
+    if (!content) return;
+    const state = JSON.parse(content);
+    const saved = state.tg_history || [];
+    if (Array.isArray(saved) && saved.length) {
+      tgHistory.push(...saved);
+      console.log(`[Gale] 从gist恢复tg_history，共${saved.length}条`);
+    }
+  } catch (e) {
+    console.log(`[Gale] tg_history恢复失败: ${e.message}`);
+  }
+}
+
+// 把 tgHistory 写回 gist 的 state.json（读-改-写，不动 trigger.py 的字段）
+let saveTgHistoryTimer = null;
+let saveTgHistoryInFlight = false;
+async function saveTgHistoryToGist() {
+  if (!GIST_TOKEN || !STATE_GIST_URL) return;
+  if (saveTgHistoryInFlight) return;
+  saveTgHistoryInFlight = true;
+  try {
+    const gistId = STATE_GIST_URL.split('/')[4];
+    const getRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: {
+        'Authorization': `Bearer ${GIST_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'gale-server'
+      }
+    });
+    if (!getRes.ok) return;
+    const getData = await getRes.json();
+    const content = getData.files?.['state.json']?.content;
+    const state = content ? JSON.parse(content) : {};
+    state.tg_history = tgHistory.slice(-40);
+    await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${GIST_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'gale-server'
+      },
+      body: JSON.stringify({
+        files: { 'state.json': { content: JSON.stringify(state, null, 2) } }
+      })
+    });
+    console.log(`[Gale] tg_history已持久化 (${state.tg_history.length}条)`);
+  } catch (e) {
+    console.log(`[Gale] tg_history保存失败: ${e.message}`);
+  } finally {
+    saveTgHistoryInFlight = false;
+  }
+}
+function scheduleTgHistorySave() {
+  if (saveTgHistoryTimer) clearTimeout(saveTgHistoryTimer);
+  saveTgHistoryTimer = setTimeout(() => {
+    saveTgHistoryTimer = null;
+    saveTgHistoryToGist();
+  }, 3000);
+}
+
 async function syncTriggerHistory() {
   if (!GIST_TOKEN || !STATE_GIST_URL) return;
-  const now = Date.now();
-  if (now - lastTriggerSync < 60000) return;
-  lastTriggerSync = now;
+  lastTriggerSync = Date.now();
   try {
     const gistId = STATE_GIST_URL.split('/')[4];
     const res = await fetch(`https://api.github.com/gists/${gistId}`, {
@@ -94,7 +167,7 @@ async function syncTriggerHistory() {
         tgHistory.push({ role: 'assistant', content: cleanContent });
       }
     }
-    if (tgHistory.length > 20) tgHistory.splice(0, tgHistory.length - 20);
+    if (tgHistory.length > 40) tgHistory.splice(0, tgHistory.length - 40);
     console.log(`[Gale] trigger_history同步完成，当前历史${tgHistory.length}条`);
   } catch (e) {
     console.log(`[Gale] trigger_history同步失败: ${e.message}`);
@@ -296,10 +369,14 @@ async function chatReply(userMsg, isGroup = false) {
     });
     const data = await res.json();
     console.log('[Gale] API response:', JSON.stringify(data));
-    const rawReply = data.choices?.[0]?.message?.content || '...信号不好，没听清。';
+    const apiContent = data.choices?.[0]?.message?.content;
+    const rawReply = apiContent || '...信号不好，没听清。';
     console.log(`[Gale] Raw reply: ${rawReply}`);
     const cleanReply = rawReply.replace(/^\[语音\]\s*/, '');
-    history.push({ role: 'assistant', content: cleanReply });
+    if (apiContent) {
+      history.push({ role: 'assistant', content: cleanReply });
+      if (!isGroup) scheduleTgHistorySave();
+    }
     return rawReply;
   } catch (e) {
     return '...Render抽风了，等下再找我。';
@@ -389,5 +466,7 @@ server.listen(PORT, () => {
   console.log(`API_BASE: ${API_BASE}`);
   console.log(`API_MODEL: ${API_MODEL}`);
   console.log(`MINIMAX: ${MINIMAX_API_KEY ? 'set' : 'missing'} | EN: ${MINIMAX_EN_VOICE_ID || 'Edge TTS'} | CN: ${MINIMAX_CN_VOICE_ID || 'Edge TTS'}`);
-  testTTS().then(() => tgPoll());
+  testTTS()
+    .then(() => loadTgHistoryFromGist())
+    .then(() => tgPoll());
 });
