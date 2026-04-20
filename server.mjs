@@ -352,13 +352,15 @@ async function sendReply(rawReply, chatId = CHAT_ID, replyToMessageId = null) {
   }
 }
 
-async function chatReply(userMsg, isGroup = false) {
+async function chatReply(userMsg, isGroup = false, { skipPush = false } = {}) {
   const history = isGroup ? groupHistory : tgHistory;
-  const limit = 40;
+  const limit = isGroup ? 60 : 40;
 
   if (!isGroup) await syncTriggerHistory();
-  history.push({ role: 'user', content: userMsg });
-  if (history.length > limit) history.splice(0, history.length - limit);
+  if (!skipPush) {
+    history.push({ role: 'user', content: userMsg });
+    if (history.length > limit) history.splice(0, history.length - limit);
+  }
 
   try {
     const memory = await getMemory();
@@ -413,16 +415,27 @@ async function tgPoll() {
           && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()));
         const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && (Math.random() < 0.10);
 
+        // 格式化消息
+        const cleanText = isGroup ? msg.text.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : msg.text;
+        const sender = msg.from ? (msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '')) : 'Unknown';
+        const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
+
+        // 被动旁听：群里所有消息都存入 groupHistory（不管会不会回复）
+        if (isGroup && cleanText) {
+          groupHistory.push({ role: 'user', content: cleanMsg });
+          if (groupHistory.length > 60) {
+            groupHistory.splice(0, groupHistory.length - 60);
+          }
+        }
+
         if (isPrivate || (isGroup && isMentioned) || hasTriggerWord || randomReply) {
           if (hasTriggerWord || randomReply) lastAutoReplyTime = now;
           processed.add(msg.message_id);
           if (processed.size > 100) {
             const arr = [...processed]; arr.splice(0, 50); processed.clear(); arr.forEach(id => processed.add(id));
           }
-          const cleanText = isGroup ? msg.text.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : msg.text;
-          const sender = msg.from ? (msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '')) : 'Unknown';
-          const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
-          const reply = await chatReply(cleanMsg, isGroup);
+          // 群聊消息已被动入库，跳过 chatReply 里的 push；私聊正常 push
+          const reply = await chatReply(cleanMsg, isGroup, { skipPush: isGroup });
           // 方案B：@必引用，触发词60%引用，随机插嘴/私聊不引用
           let replyToMessageId = null;
           if (isGroup && isMentioned) replyToMessageId = msg.message_id;
