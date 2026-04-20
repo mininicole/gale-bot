@@ -302,21 +302,28 @@ async function textToSpeech(text) {
 }
 
 // ===== Telegram =====
-async function tgSend(text, chatId = CHAT_ID) {
+async function tgSend(text, chatId = CHAT_ID, replyToMessageId = null) {
+  const payload = { chat_id: chatId, text };
+  if (replyToMessageId) {
+    payload.reply_parameters = { message_id: replyToMessageId, allow_sending_without_reply: true };
+  }
   await fetch(`${TG_API}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text })
+    body: JSON.stringify(payload)
   });
 }
 
-async function tgSendVoice(audioBuffer, chatId = CHAT_ID, caption = '') {
+async function tgSendVoice(audioBuffer, chatId = CHAT_ID, caption = '', replyToMessageId = null) {
   const boundary = '----GaleTTS' + Date.now();
   const chatPart = `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`;
   const captionPart = caption ? `--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` : '';
+  const replyPart = replyToMessageId
+    ? `--${boundary}\r\nContent-Disposition: form-data; name="reply_parameters"\r\n\r\n${JSON.stringify({ message_id: replyToMessageId, allow_sending_without_reply: true })}\r\n`
+    : '';
   const filePart = `--${boundary}\r\nContent-Disposition: form-data; name="voice"; filename="voice.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n`;
   const ending = `\r\n--${boundary}--\r\n`;
-  const body = Buffer.concat([Buffer.from(chatPart + captionPart + filePart), audioBuffer, Buffer.from(ending)]);
+  const body = Buffer.concat([Buffer.from(chatPart + captionPart + replyPart + filePart), audioBuffer, Buffer.from(ending)]);
   await fetch(`${TG_API}/sendVoice`, {
     method: 'POST',
     headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
@@ -324,23 +331,23 @@ async function tgSendVoice(audioBuffer, chatId = CHAT_ID, caption = '') {
   });
 }
 
-async function sendReply(rawReply, chatId = CHAT_ID) {
+async function sendReply(rawReply, chatId = CHAT_ID, replyToMessageId = null) {
   const isVoice = rawReply.startsWith('[语音]');
   const cleanText = rawReply.replace(/^\[语音\]\s*/, '');
 
   if (isVoice) {
     try {
       const audio = await textToSpeech(cleanText);
-      await tgSendVoice(audio, chatId, cleanText);
+      await tgSendVoice(audio, chatId, cleanText, replyToMessageId);
       console.log('[Gale] 语音发送成功');
       return cleanText;
     } catch (e) {
       console.log(`[Gale] TTS失败，降级文字: ${e.message}`);
-      await tgSend(cleanText, chatId);
+      await tgSend(cleanText, chatId, replyToMessageId);
       return cleanText;
     }
   } else {
-    await tgSend(cleanText, chatId);
+    await tgSend(cleanText, chatId, replyToMessageId);
     return cleanText;
   }
 }
@@ -416,7 +423,11 @@ async function tgPoll() {
           const sender = msg.from ? (msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '')) : 'Unknown';
           const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
           const reply = await chatReply(cleanMsg, isGroup);
-          await sendReply(reply, msg.chat.id);
+          // 方案B：@必引用，触发词60%引用，随机插嘴/私聊不引用
+          let replyToMessageId = null;
+          if (isGroup && isMentioned) replyToMessageId = msg.message_id;
+          else if (hasTriggerWord && Math.random() < 0.6) replyToMessageId = msg.message_id;
+          await sendReply(reply, msg.chat.id, replyToMessageId);
         }
       }
       await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&limit=0`);
