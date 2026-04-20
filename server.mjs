@@ -388,13 +388,18 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false } = {}) {
     }
     return rawReply;
   } catch (e) {
-    return '...Render抽风了，等下再找我。';
+    return '...网络抽风了，等下再找我。';
   }
 }
+
+// 每个 bot 的上次被回复时间（防止两个 bot 互相@锁死）
+const botReplyCooldown = new Map();
+const BOT_REPLY_COOLDOWN_MS = 60000;
 
 async function tgPoll() {
   if (!TG_TOKEN || !CHAT_ID || !API_KEY) return;
   const BOT_USERNAME = process.env.BOT_USERNAME || '@Galefornicole_bot';
+  const BOT_MULT = 0.5;  // 来自其他 bot 的消息，触发概率打五折
   try {
     const res = await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&timeout=30`);
     const data = await res.json();
@@ -408,12 +413,24 @@ async function tgPoll() {
         const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
         const isMentioned = msg.text.toLowerCase().includes(BOT_USERNAME.toLowerCase());
 
-        // 触发词匹配 + 随机插嘴（都受5分钟冷却限制）
+        // Bot-to-Bot：检测发送者是不是 bot，以及 60s 冷却期
+        const isFromBot = msg.from?.is_bot === true;
+        const fromUserId = msg.from?.id;
+        const inBotCooldown = isFromBot && fromUserId &&
+          (Date.now() - (botReplyCooldown.get(fromUserId) || 0) < BOT_REPLY_COOLDOWN_MS);
+        const botMult = isFromBot ? BOT_MULT : 1;
+
+        // @ 提到：bot 来的要再打 5 折，且冷却期内完全跳过
+        const mentionPass = isMentioned && !inBotCooldown && (isFromBot ? Math.random() < BOT_MULT : true);
+
+        // 触发词匹配 + 随机插嘴（都受5分钟冷却限制 + bot 冷却 + bot 概率打折）
         const now = Date.now();
         const cooledDown = now - lastAutoReplyTime > TRIGGER_COOLDOWN;
-        const hasTriggerWord = isGroup && !isMentioned && cooledDown
-          && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()));
-        const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && (Math.random() < 0.10);
+        const hasTriggerWord = isGroup && !isMentioned && cooledDown && !inBotCooldown
+          && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()))
+          && (isFromBot ? Math.random() < botMult : true);
+        const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && !inBotCooldown
+          && (Math.random() < 0.10 * botMult);
 
         // 格式化消息
         const cleanText = isGroup ? msg.text.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : msg.text;
@@ -428,7 +445,7 @@ async function tgPoll() {
           }
         }
 
-        if (isPrivate || (isGroup && isMentioned) || hasTriggerWord || randomReply) {
+        if (isPrivate || (isGroup && mentionPass) || hasTriggerWord || randomReply) {
           if (hasTriggerWord || randomReply) lastAutoReplyTime = now;
           processed.add(msg.message_id);
           if (processed.size > 100) {
@@ -438,9 +455,11 @@ async function tgPoll() {
           const reply = await chatReply(cleanMsg, isGroup, { skipPush: isGroup });
           // 方案B：@必引用，触发词60%引用，随机插嘴/私聊不引用
           let replyToMessageId = null;
-          if (isGroup && isMentioned) replyToMessageId = msg.message_id;
+          if (isGroup && mentionPass) replyToMessageId = msg.message_id;
           else if (hasTriggerWord && Math.random() < 0.6) replyToMessageId = msg.message_id;
           await sendReply(reply, msg.chat.id, replyToMessageId);
+          // 回复了 bot 就记一笔，60 秒内不再回同一个 bot（防死循环）
+          if (isFromBot && fromUserId) botReplyCooldown.set(fromUserId, Date.now());
         }
       }
       await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&limit=0`);
