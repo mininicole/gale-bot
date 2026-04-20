@@ -84,7 +84,7 @@ async function loadTgHistoryFromGist() {
     const content = data.files?.['state.json']?.content;
     if (!content) return;
     const state = JSON.parse(content);
-    const saved = state.tg_history || [];
+    const saved = state.tg_history_gale || [];
     if (Array.isArray(saved) && saved.length) {
       tgHistory.push(...saved);
       console.log(`[Gale] 从gist恢复tg_history，共${saved.length}条`);
@@ -114,7 +114,7 @@ async function saveTgHistoryToGist() {
     const getData = await getRes.json();
     const content = getData.files?.['state.json']?.content;
     const state = content ? JSON.parse(content) : {};
-    state.tg_history = tgHistory.slice(-40);
+    state.tg_history_gale = tgHistory.slice(-40);
     await fetch(`https://api.github.com/gists/${gistId}`, {
       method: 'PATCH',
       headers: {
@@ -127,7 +127,7 @@ async function saveTgHistoryToGist() {
         files: { 'state.json': { content: JSON.stringify(state, null, 2) } }
       })
     });
-    console.log(`[Gale] tg_history已持久化 (${state.tg_history.length}条)`);
+    console.log(`[Gale] tg_history已持久化 (${state.tg_history_gale.length}条)`);
   } catch (e) {
     console.log(`[Gale] tg_history保存失败: ${e.message}`);
   } finally {
