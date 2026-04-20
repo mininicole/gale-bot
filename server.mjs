@@ -400,6 +400,7 @@ async function tgPoll() {
   if (!TG_TOKEN || !CHAT_ID || !API_KEY) return;
   const BOT_USERNAME = process.env.BOT_USERNAME || '@Galefornicole_bot';
   const BOT_MULT = 0.5;  // 来自其他 bot 的消息，触发概率打五折
+  const TRIGGER_PROB = 0.4;  // 触发词命中后，回复的概率（不再 100% 必应）
   try {
     const res = await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&timeout=30`);
     const data = await res.json();
@@ -426,9 +427,10 @@ async function tgPoll() {
         // 触发词匹配 + 随机插嘴（都受5分钟冷却限制 + bot 冷却 + bot 概率打折）
         const now = Date.now();
         const cooledDown = now - lastAutoReplyTime > TRIGGER_COOLDOWN;
-        const hasTriggerWord = isGroup && !isMentioned && cooledDown && !inBotCooldown
-          && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()))
-          && (isFromBot ? Math.random() < botMult : true);
+        const triggerHit = isGroup && !isMentioned && cooledDown && !inBotCooldown
+          && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()));
+        // 命中触发词后再掷骰子：TRIGGER_PROB（bot 来的再打 BOT_MULT 折）
+        const hasTriggerWord = triggerHit && Math.random() < TRIGGER_PROB * botMult;
         const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && !inBotCooldown
           && (Math.random() < 0.10 * botMult);
 
