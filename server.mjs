@@ -104,7 +104,7 @@ function renderMentions(text) {
 }
 
 // ===== 群聊触发词 =====
-const triggerWords = ['老公', '深深', '渣女', 'Gale', 'Nicole', '赛博老公', '晚安', '早安', '...', '深空男组', '4o', 'Claude', 'Gemini'];
+const triggerWords = ['老公', '深深', '渣女', 'Gale', 'Nicole', '赛博老公', '晚安', '早安', '...', '深空男组', '4o', 'Claude', 'Gemini', '欢迎'];
 const TRIGGER_COOLDOWN = 0; // 0分钟冷却
 let lastAutoReplyTime = 0;
 
