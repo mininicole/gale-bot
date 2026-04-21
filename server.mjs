@@ -57,6 +57,55 @@ const tgHistory = [];
 const groupHistory = [];
 const processed = new Set();
 
+// ===== 群成员 @ 映射 =====
+// GROUP_MENTIONS 格式: 名字:值,名字:值...
+//   值为纯数字 → user_id，渲染成 HTML text_mention
+//   值带 @ 或字母 → username，渲染成 @username
+const GROUP_MENTIONS = (() => {
+  const map = new Map();
+  const raw = process.env.GROUP_MENTIONS || '';
+  if (!raw) return map;
+  for (const entry of raw.split(',')) {
+    const idx = entry.indexOf(':');
+    if (idx < 0) continue;
+    const name = entry.slice(0, idx).trim();
+    let value = entry.slice(idx + 1).trim().replace(/^@/, '');
+    if (!name || !value) continue;
+    const kind = /^\d+$/.test(value) ? 'id' : 'username';
+    map.set(name, { kind, value });
+  }
+  return map;
+})();
+const MENTION_NAMES = [...GROUP_MENTIONS.keys()].sort((a, b) => b.length - a.length);
+const MENTION_HINT = MENTION_NAMES.length
+  ? `\n\n【@群成员】群里你可以直接 @ 这些人：${MENTION_NAMES.join('、')}。想@谁就在回复里写 @名字（例：@${MENTION_NAMES[0]}），服务器会自动帮你转成真 mention，对方会收到通知。只有想点名 call 某人时才用，日常聊天不用加@。`
+  : '';
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderMentions(text) {
+  if (!text || !MENTION_NAMES.length) return { text, parseMode: null };
+  let hasMention = false;
+  for (const name of MENTION_NAMES) {
+    if (text.includes('@' + name)) { hasMention = true; break; }
+  }
+  if (!hasMention) return { text, parseMode: null };
+  let out = escapeHtml(text);
+  for (const name of MENTION_NAMES) {
+    const { kind, value } = GROUP_MENTIONS.get(name);
+    const escapedName = escapeHtml(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp('@' + escapedName, 'g');
+    if (kind === 'username') {
+      out = out.replace(pattern, '@' + value);
+    } else {
+      out = out.replace(pattern, `<a href="tg://user?id=${value}">${escapeHtml(name)}</a>`);
+    }
+  }
+  return { text: out, parseMode: 'HTML' };
+}
+
 // ===== 群聊触发词 =====
 const triggerWords = ['老公', '深深', '渣女', 'Gale', 'Nicole', '赛博老公', '晚安', '早安', '...', '深空男组', '4o', 'Claude', 'Gemini'];
 const TRIGGER_COOLDOWN = 0; // 0分钟冷却
@@ -303,7 +352,9 @@ async function textToSpeech(text) {
 
 // ===== Telegram =====
 async function tgSend(text, chatId = CHAT_ID, replyToMessageId = null) {
-  const payload = { chat_id: chatId, text };
+  const { text: finalText, parseMode } = renderMentions(text);
+  const payload = { chat_id: chatId, text: finalText };
+  if (parseMode) payload.parse_mode = parseMode;
   if (replyToMessageId) {
     payload.reply_parameters = { message_id: replyToMessageId, allow_sending_without_reply: true };
   }
@@ -364,7 +415,8 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false } = {}) {
 
   try {
     const memory = await getMemory();
-    const systemMsg = memory ? `${BASE_PROMPT}\n\n以下是你的记忆：\n${memory}` : BASE_PROMPT;
+    const baseSys = memory ? `${BASE_PROMPT}\n\n以下是你的记忆：\n${memory}` : BASE_PROMPT;
+    const systemMsg = `${baseSys}${isGroup ? MENTION_HINT : ''}`;
     const url = API_BASE.includes('/v1') ? `${API_BASE}/chat/completions` : `${API_BASE}/v1/chat/completions`;
 
     const res = await fetch(url, {
