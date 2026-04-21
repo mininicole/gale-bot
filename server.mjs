@@ -491,6 +491,11 @@ async function tgPoll() {
         const sender = msg.from ? (msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '')) : 'Unknown';
         const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
 
+        // 群成员 ID 日志（用于建 GROUP_MENTIONS 映射）
+        if (isGroup && msg.from) {
+          console.log(`[member] name="${sender}" id=${msg.from.id} username=${msg.from.username || '(none)'} is_bot=${msg.from.is_bot || false}`);
+        }
+
         // 被动旁听：群里所有消息都存入 groupHistory（不管会不会回复）
         if (isGroup && cleanText) {
           groupHistory.push({ role: 'user', content: cleanMsg });
