@@ -77,32 +77,29 @@ const GROUP_MENTIONS = (() => {
   return map;
 })();
 const MENTION_NAMES = [...GROUP_MENTIONS.keys()].sort((a, b) => b.length - a.length);
-const MENTION_HINT = MENTION_NAMES.length
-  ? `\n\n【@群成员】群里你可以直接 @ 这些人：${MENTION_NAMES.join('、')}。想@谁就在回复里写 @名字（例：@${MENTION_NAMES[0]}），服务器会自动帮你转成真 mention，对方会收到通知。只有想点名 call 某人时才用，日常聊天不用加@。`
-  : '';
+
+function buildMentionHint() {
+  if (!MENTION_NAMES.length) return '';
+  const lines = [...GROUP_MENTIONS.entries()].map(([name, { kind, value }]) => {
+    if (kind === 'username') return `${name} → @${value}`;
+    return `${name} → [@${name}](tg://user?id=${value})`;
+  });
+  return `\n\n【群成员专属艾特指令】\n当你在回复中需要@特定成员时，必须严格使用以下格式（千万不要修改括号和链接）：\n${lines.join('\n')}\n\n只有想点名 call 某人时才用，日常聊天不用加@。`;
+}
+const MENTION_HINT = buildMentionHint();
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function renderMentions(text) {
-  if (!text || !MENTION_NAMES.length) return { text, parseMode: null };
-  let hasMention = false;
-  for (const name of MENTION_NAMES) {
-    if (text.includes('@' + name)) { hasMention = true; break; }
-  }
-  if (!hasMention) return { text, parseMode: null };
-  let out = escapeHtml(text);
-  for (const name of MENTION_NAMES) {
-    const { kind, value } = GROUP_MENTIONS.get(name);
-    const escapedName = escapeHtml(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const pattern = new RegExp('@' + escapedName, 'g');
-    if (kind === 'username') {
-      out = out.replace(pattern, '@' + value);
-    } else {
-      out = out.replace(pattern, `<a href="tg://user?id=${value}">${escapeHtml(name)}</a>`);
-    }
-  }
+  if (!text) return { text, parseMode: null };
+  const mdPattern = /\[@([^\]]+)\]\(tg:\/\/user\?id=(\d+)\)/g;
+  if (!mdPattern.test(text)) return { text, parseMode: null };
+  mdPattern.lastIndex = 0;
+  const escaped = escapeHtml(text);
+  const escapedPattern = /\[@([^\]]+)\]\(tg:\/\/user\?id=(\d+)\)/g;
+  const out = escaped.replace(escapedPattern, (_, name, id) => `<a href="tg://user?id=${id}">@${name}</a>`);
   return { text: out, parseMode: 'HTML' };
 }
 
