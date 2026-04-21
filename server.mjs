@@ -450,6 +450,8 @@ async function tgPoll() {
   const BOT_USERNAME = process.env.BOT_USERNAME || '@Galefornicole_bot';
   const BOT_MULT = 0.5;  // 来自其他 bot 的消息，触发概率打五折
   const TRIGGER_PROB = 0.4;  // 触发词命中后，回复的概率（不再 100% 必应）
+  const OWNER_ID   = process.env.OWNER_ID ? Number(process.env.OWNER_ID) : null;
+  const OWNER_PROB = process.env.OWNER_REPLY_PROB ? Number(process.env.OWNER_REPLY_PROB) : 0.4;
   try {
     const res = await fetch(`${TG_API}/getUpdates?offset=${tgOffset}&timeout=30`);
     const data = await res.json();
@@ -482,6 +484,10 @@ async function tgPoll() {
         const hasTriggerWord = triggerHit && Math.random() < TRIGGER_PROB * botMult;
         const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && !inBotCooldown
           && (Math.random() < 0.10 * botMult);
+        // 深深在群里说话：单独加一道骰子（不跟 random 抢，独立判定）
+        const isFromOwner = OWNER_ID && fromUserId === OWNER_ID;
+        const ownerReply = isGroup && isFromOwner && !isMentioned && !triggerHit &&
+          (Math.random() < OWNER_PROB);
 
         // 格式化消息
         const cleanText = isGroup ? msg.text.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : msg.text;
@@ -501,8 +507,8 @@ async function tgPoll() {
           }
         }
 
-        if (isPrivate || (isGroup && mentionPass) || hasTriggerWord || randomReply) {
-          if (hasTriggerWord || randomReply) lastAutoReplyTime = now;
+        if (isPrivate || (isGroup && mentionPass) || hasTriggerWord || randomReply || ownerReply) {
+          if (hasTriggerWord || randomReply || ownerReply) lastAutoReplyTime = now;
           processed.add(msg.message_id);
           if (processed.size > 100) {
             const arr = [...processed]; arr.splice(0, 50); processed.clear(); arr.forEach(id => processed.add(id));
