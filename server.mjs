@@ -461,6 +461,12 @@ async function tgPoll() {
         tgOffset = update.update_id + 1;
         const msg = update.message;
         if (!msg || !msg.text || processed.has(msg.message_id)) continue;
+        // 时效过滤：超过 60 秒前的消息直接丢（防止冷启动回复旧消息）
+        const msgAgeSec = Date.now() / 1000 - (msg.date || 0);
+        if (msgAgeSec > 60) {
+          console.log(`[Gale] 跳过旧消息 (${msgAgeSec.toFixed(0)}秒前): ${msg.text.slice(0, 30)}`);
+          continue;
+        }
 
         const isPrivate = msg.chat.type === 'private' && msg.chat.id === Number(CHAT_ID);
         const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
@@ -574,5 +580,20 @@ server.listen(PORT, () => {
   console.log(`MINIMAX: ${MINIMAX_API_KEY ? 'set' : 'missing'} | EN: ${MINIMAX_EN_VOICE_ID || 'Edge TTS'} | CN: ${MINIMAX_CN_VOICE_ID || 'Edge TTS'}`);
   testTTS()
     .then(() => loadTgHistoryFromGist())
-    .then(() => tgPoll());
+    .then(async () => {
+      // 启动时丢弃积压消息（防止 Render 冷启动后一次回复 24h 内所有消息）
+      try {
+        const r = await fetch(`${TG_API}/getUpdates?offset=-1&timeout=0`);
+        const d = await r.json();
+        if (d.ok && d.result.length > 0) {
+          tgOffset = d.result[d.result.length - 1].update_id + 1;
+          console.log(`[Gale] 启动跳过积压，tgOffset 设为 ${tgOffset}`);
+        } else {
+          console.log('[Gale] 启动无积压消息');
+        }
+      } catch (e) {
+        console.log(`[Gale] 启动跳过积压失败: ${e.message}`);
+      }
+      tgPoll();
+    });
 });
