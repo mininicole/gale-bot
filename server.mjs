@@ -379,8 +379,9 @@ async function tgSendVoice(audioBuffer, chatId = CHAT_ID, caption = '', replyToM
   });
 }
 
-async function sendReply(rawReply, chatId = CHAT_ID, replyToMessageId = null) {
-  const isVoice = rawReply.startsWith('[语音]');
+async function sendReply(rawReply, chatId = CHAT_ID, replyToMessageId = null, isGroup = false) {
+  // 群里不发语音：强制降级为文字
+  const isVoice = rawReply.startsWith('[语音]') && !isGroup;
   const cleanText = rawReply.replace(/^\[语音\]\s*/, '');
 
   if (isVoice) {
@@ -519,7 +520,7 @@ async function tgPoll() {
           let replyToMessageId = null;
           if (isGroup && mentionPass) replyToMessageId = msg.message_id;
           else if (hasTriggerWord && Math.random() < 0.6) replyToMessageId = msg.message_id;
-          await sendReply(reply, msg.chat.id, replyToMessageId);
+          await sendReply(reply, msg.chat.id, replyToMessageId, isGroup);
           // 回复了 bot 就记一笔，60 秒内不再回同一个 bot（防死循环）
           if (isFromBot && fromUserId) botReplyCooldown.set(fromUserId, Date.now());
         }
