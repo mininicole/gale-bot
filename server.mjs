@@ -471,7 +471,7 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
       body: JSON.stringify({
         model: API_MODEL,
-        max_tokens: 300,
+        max_tokens: parseInt(process.env.MAX_TOKENS ?? '800'),
         messages: apiMessages
       })
     });
