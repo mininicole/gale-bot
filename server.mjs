@@ -675,7 +675,7 @@ server.listen(PORT, () => {
   console.log(`CHAT_ID: ${CHAT_ID ? 'set' : 'missing'}`);
   console.log(`API_KEY: ${API_KEY ? 'set' : 'missing'}`);
   console.log(`API_BASE: ${API_BASE}`);
-  console.log(`API_MODEL: ${API_MODEL}`);
+  console.log(`API_MODEL chain (${API_MODELS.length}): ${API_MODELS.join(' → ')}`);
   console.log(`MINIMAX: ${MINIMAX_API_KEY ? 'set' : 'missing'} | EN: ${MINIMAX_EN_VOICE_ID || 'Edge TTS'} | CN: ${MINIMAX_CN_VOICE_ID || 'Edge TTS'}`);
   testTTS()
     .then(() => loadTgHistoryFromGist())
