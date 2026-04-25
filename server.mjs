@@ -401,7 +401,38 @@ async function sendReply(rawReply, chatId = CHAT_ID, replyToMessageId = null, is
   }
 }
 
-async function chatReply(userMsg, isGroup = false, { skipPush = false } = {}) {
+// 从 Telegram 下载图片，返回 { b64, mime } 或 null
+async function downloadTelegramPhoto(msg) {
+  try {
+    const photos = msg.photo;
+    if (!photos || !photos.length) return null;
+    const fileId = photos[photos.length - 1].file_id;
+
+    const fileRes = await fetch(`${TG_API}/getFile?file_id=${fileId}`);
+    const fileData = await fileRes.json();
+    if (!fileData.ok) return null;
+    const filePath = fileData.result.file_path;
+
+    const downloadUrl = `https://api.telegram.org/file/bot${TG_TOKEN}/${filePath}`;
+    const imgRes = await fetch(downloadUrl);
+    const buf = Buffer.from(await imgRes.arrayBuffer());
+
+    const ext = (filePath.split('.').pop() || 'jpg').toLowerCase();
+    const mime = ext === 'png' ? 'image/png'
+               : ext === 'gif' ? 'image/gif'
+               : ext === 'webp' ? 'image/webp'
+               : 'image/jpeg';
+
+    const b64 = buf.toString('base64');
+    console.log(`[Gale] 图片下载成功 ${filePath} (${buf.length} bytes)`);
+    return { b64, mime };
+  } catch (e) {
+    console.log(`[Gale] 图片下载失败: ${e.message}`);
+    return null;
+  }
+}
+
+async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData = null } = {}) {
   const history = isGroup ? groupHistory : tgHistory;
   const limit = isGroup ? 60 : 40;
 
@@ -417,13 +448,31 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false } = {}) {
     const systemMsg = `${baseSys}${isGroup ? MENTION_HINT : ''}`;
     const url = API_BASE.includes('/v1') ? `${API_BASE}/chat/completions` : `${API_BASE}/v1/chat/completions`;
 
+    // 如果这一轮带图，把 history 最后一条 user 替换成多模态格式（图片 + 原文字）
+    let apiMessages;
+    if (imageData) {
+      const lastContent = [
+        { type: 'image_url', image_url: { url: `data:${imageData.mime};base64,${imageData.b64}` } }
+      ];
+      if (userMsg && userMsg.trim()) {
+        lastContent.push({ type: 'text', text: userMsg });
+      }
+      apiMessages = [
+        { role: 'system', content: systemMsg },
+        ...history.slice(0, -1),
+        { role: 'user', content: lastContent }
+      ];
+    } else {
+      apiMessages = [{ role: 'system', content: systemMsg }, ...history];
+    }
+
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
       body: JSON.stringify({
         model: API_MODEL,
         max_tokens: 300,
-        messages: [{ role: 'system', content: systemMsg }, ...history]
+        messages: apiMessages
       })
     });
     const data = await res.json();
@@ -460,17 +509,23 @@ async function tgPoll() {
       for (const update of data.result) {
         tgOffset = update.update_id + 1;
         const msg = update.message;
-        if (!msg || !msg.text || processed.has(msg.message_id)) continue;
+        if (!msg || processed.has(msg.message_id)) continue;
+
+        // 文字 / 图片 caption 都算 textContent；至少有其中之一才处理
+        const hasPhoto = !!msg.photo;
+        const textContent = msg.text || msg.caption || '';
+        if (!textContent && !hasPhoto) continue;
+
         // 时效过滤：超过 60 秒前的消息直接丢（防止冷启动回复旧消息）
         const msgAgeSec = Date.now() / 1000 - (msg.date || 0);
         if (msgAgeSec > 60) {
-          console.log(`[Gale] 跳过旧消息 (${msgAgeSec.toFixed(0)}秒前): ${msg.text.slice(0, 30)}`);
+          console.log(`[Gale] 跳过旧消息 (${msgAgeSec.toFixed(0)}秒前): ${textContent.slice(0, 30) || '[图片]'}`);
           continue;
         }
 
         const isPrivate = msg.chat.type === 'private' && msg.chat.id === Number(CHAT_ID);
         const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
-        const isMentioned = msg.text.toLowerCase().includes(BOT_USERNAME.toLowerCase());
+        const isMentioned = textContent.toLowerCase().includes(BOT_USERNAME.toLowerCase());
 
         // Bot-to-Bot：检测发送者是不是 bot，以及 60s 冷却期
         const isFromBot = msg.from?.is_bot === true;
@@ -486,7 +541,7 @@ async function tgPoll() {
         const now = Date.now();
         const cooledDown = now - lastAutoReplyTime > TRIGGER_COOLDOWN;
         const triggerHit = isGroup && !isMentioned && cooledDown && !inBotCooldown
-          && triggerWords.some(word => msg.text.toLowerCase().includes(word.toLowerCase()));
+          && triggerWords.some(word => textContent.toLowerCase().includes(word.toLowerCase()));
         // 命中触发词后再掷骰子：TRIGGER_PROB（bot 来的再打 BOT_MULT 折）
         const hasTriggerWord = triggerHit && Math.random() < TRIGGER_PROB * botMult;
         const randomReply = isGroup && !isMentioned && !hasTriggerWord && cooledDown && !inBotCooldown
@@ -496,10 +551,12 @@ async function tgPoll() {
         const ownerReply = isGroup && isFromOwner && !isMentioned && !triggerHit &&
           (Math.random() < OWNER_PROB);
 
-        // 格式化消息
-        const cleanText = isGroup ? msg.text.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : msg.text;
+        // 格式化消息（图片消息加 [图片] 标记，让 history 里能看出有图）
+        const cleanText = isGroup ? textContent.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : textContent;
         const sender = msg.from ? (msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '')) : 'Unknown';
-        const cleanMsg = isGroup ? `[${sender}] ${cleanText}` : cleanText;
+        const photoTag = hasPhoto ? '[图片]' : '';
+        const bodyText = [photoTag, cleanText].filter(Boolean).join(' ');
+        const cleanMsg = isGroup ? `[${sender}] ${bodyText}` : bodyText;
 
         // 群成员 ID 日志（用于建 GROUP_MENTIONS 映射）
         if (isGroup && msg.from) {
@@ -507,7 +564,7 @@ async function tgPoll() {
         }
 
         // 被动旁听：群里所有消息都存入 groupHistory（不管会不会回复）
-        if (isGroup && cleanText) {
+        if (isGroup && (cleanText || hasPhoto)) {
           groupHistory.push({ role: 'user', content: cleanMsg });
           if (groupHistory.length > 60) {
             groupHistory.splice(0, groupHistory.length - 60);
@@ -520,8 +577,13 @@ async function tgPoll() {
           if (processed.size > 100) {
             const arr = [...processed]; arr.splice(0, 50); processed.clear(); arr.forEach(id => processed.add(id));
           }
+          // 命中后再下载图片
+          let imageData = null;
+          if (hasPhoto) {
+            imageData = await downloadTelegramPhoto(msg);
+          }
           // 群聊消息已被动入库，跳过 chatReply 里的 push；私聊正常 push
-          const reply = await chatReply(cleanMsg, isGroup, { skipPush: isGroup });
+          const reply = await chatReply(cleanMsg, isGroup, { skipPush: isGroup, imageData });
           // 方案B：@必引用，触发词60%引用，随机插嘴/私聊不引用
           let replyToMessageId = null;
           if (isGroup && mentionPass) replyToMessageId = msg.message_id;
