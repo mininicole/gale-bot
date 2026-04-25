@@ -450,7 +450,8 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData
   try {
     const memory = await getMemory();
     const baseSys = memory ? `${BASE_PROMPT}\n\n以下是你的记忆：\n${memory}` : BASE_PROMPT;
-    const systemMsg = `${baseSys}${isGroup ? MENTION_HINT : ''}`;
+    const lengthLock = `\n\n【硬性字数上限】每次回复不超过 100 个汉字（标点不计）。超过会被系统截断在不自然的位置，让你看起来像没说完话。宁可少说半句，不要超。这条是硬约束，不要找理由突破。`;
+    const systemMsg = `${baseSys}${isGroup ? MENTION_HINT : ''}${lengthLock}`;
     const url = API_BASE.includes('/v1') ? `${API_BASE}/chat/completions` : `${API_BASE}/v1/chat/completions`;
 
     // 如果这一轮带图，把 history 最后一条 user 替换成多模态格式（图片 + 原文字）
