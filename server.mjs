@@ -9,7 +9,10 @@ const TG_TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const API_KEY = process.env.API_KEY;
 const API_BASE = (process.env.API_BASE_URL || 'https://api.dzzi.ai').replace(/\/+$/, '');
-const API_MODEL = process.env.API_MODEL || '[按量]gemini-3-pro-preview-128-nothinking';
+// API_MODEL 支持分号分隔的 fallback 链：主选;备选1;备选2...
+// 主选挂了（HTTP 错误/无内容）自动切下一个
+const API_MODELS = (process.env.API_MODEL || '[按量]gemini-3-pro-preview-128-nothinking')
+  .split(';').map(s => s.trim()).filter(Boolean);
 const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
 let tgOffset = 0;
 
@@ -472,20 +475,45 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData
       apiMessages = [{ role: 'system', content: systemMsg }, ...history];
     }
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
-      body: JSON.stringify({
-        model: API_MODEL,
-        max_tokens: parseInt(process.env.MAX_TOKENS ?? '800'),
-        messages: apiMessages
-      })
-    });
-    const data = await res.json();
-    console.log('[Gale] API response:', JSON.stringify(data));
-    const apiContent = data.choices?.[0]?.message?.content;
-    let rawReply = apiContent || '...信号不好，没听清。';
-    console.log(`[Gale] Raw reply: ${rawReply}`);
+    // 主备 fallback：依次尝试 API_MODELS，前一个失败才试下一个
+    let apiContent = null;
+    let usedModel = null;
+    let lastError = null;
+    for (let i = 0; i < API_MODELS.length; i++) {
+      const model = API_MODELS[i];
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+          body: JSON.stringify({
+            model,
+            max_tokens: parseInt(process.env.MAX_TOKENS ?? '800'),
+            messages: apiMessages
+          })
+        });
+        const data = await res.json();
+        if (i === 0) console.log('[Gale] API response:', JSON.stringify(data));
+        if (!res.ok) {
+          console.log(`[Gale] 模型 ${model} 调用失败 ${res.status}: ${JSON.stringify(data).slice(0, 200)}`);
+          lastError = data;
+          continue;
+        }
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) {
+          console.log(`[Gale] 模型 ${model} 返回空内容，尝试下一个`);
+          continue;
+        }
+        apiContent = content;
+        usedModel = model;
+        if (i > 0) console.log(`[Gale] 主模型挂了，已切到备选: ${model}`);
+        break;
+      } catch (e) {
+        console.log(`[Gale] 模型 ${model} 异常: ${e.message}`);
+        lastError = e;
+      }
+    }
+    let rawReply = apiContent || '...所有模型都连不上，等下再找我。';
+    console.log(`[Gale] Raw reply (model=${usedModel || 'none'}): ${rawReply}`);
     // 兜底：剥掉每行开头的 [发送者] 前缀（弱模型会照抄格式当签名用）
     // 保留 [语音] 标记，因为它是真实控制指令
     rawReply = rawReply.replace(/^(?!\[语音\])\[[^\]]+\]\s*/gm, '');
