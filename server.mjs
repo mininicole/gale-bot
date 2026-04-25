@@ -94,6 +94,9 @@ function escapeHtml(s) {
 
 function renderMentions(text) {
   if (!text) return { text, parseMode: null };
+  // 截断兜底：如果末尾有残缺的 markdown @-mention（max_tokens 被切了 ）），直接抹掉
+  text = text.replace(/\s*\[@[^\]]*\]\(tg:\/\/user\?id=\d*$/g, '').trim();
+  text = text.replace(/\s*\[@[^\]]*$/g, '').trim();
   const mdPattern = /\[@([^\]]+)\]\(tg:\/\/user\?id=(\d+)\)/g;
   if (!mdPattern.test(text)) return { text, parseMode: null };
   mdPattern.lastIndex = 0;
