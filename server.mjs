@@ -484,8 +484,11 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData
     const data = await res.json();
     console.log('[Gale] API response:', JSON.stringify(data));
     const apiContent = data.choices?.[0]?.message?.content;
-    const rawReply = apiContent || '...信号不好，没听清。';
+    let rawReply = apiContent || '...信号不好，没听清。';
     console.log(`[Gale] Raw reply: ${rawReply}`);
+    // 兜底：剥掉每行开头的 [发送者] 前缀（弱模型会照抄格式当签名用）
+    // 保留 [语音] 标记，因为它是真实控制指令
+    rawReply = rawReply.replace(/^(?!\[语音\])\[[^\]]+\]\s*/gm, '');
     const cleanReply = rawReply.replace(/^\[语音\]\s*/, '');
     if (apiContent) {
       history.push({ role: 'assistant', content: cleanReply });
