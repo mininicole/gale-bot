@@ -84,7 +84,7 @@ function buildMentionHint() {
     if (kind === 'username') return `${name} → @${value}`;
     return `${name} → [@${name}](tg://user?id=${value})`;
   });
-  return `\n\n【群成员专属艾特指令】\n当你在回复中需要@特定成员时，必须严格使用以下格式（千万不要修改括号和链接）：\n${lines.join('\n')}\n\n只有想点名 call 某人时才用，日常聊天不用加@。`;
+  return `\n\n【群成员专属艾特指令】\n当你在回复中需要@特定成员时，必须严格使用以下格式（千万不要修改括号和链接）：\n${lines.join('\n')}\n\n严格规则：\n1. 你回复对方时，不要在末尾再 @ 对方——telegram 的 reply 引用已经 ping 了 ta，再 @ 是冗余的，且浪费 token。\n2. 只有当你想点名「不在当前对话里的第三方」时才用 @（例如让 Evan 知道某事）。\n3. 日常聊天（哄、调侃、回应）一律不加 @。\n4. 不要把 @ 放在回复最末尾作为"签名"。`;
 }
 const MENTION_HINT = buildMentionHint();
 
@@ -94,9 +94,11 @@ function escapeHtml(s) {
 
 function renderMentions(text) {
   if (!text) return { text, parseMode: null };
-  // 截断兜底：如果末尾有残缺的 markdown @-mention（max_tokens 被切了 ）），直接抹掉
+  // 截断兜底：末尾残缺的 markdown @-mention（max_tokens 切了 ）），抹掉
   text = text.replace(/\s*\[@[^\]]*\]\(tg:\/\/user\?id=\d*$/g, '').trim();
   text = text.replace(/\s*\[@[^\]]*$/g, '').trim();
+  // 冗余兜底：完整的 @-mention 单独占据末尾（且前面有内容），剥掉——reply 引用已经 ping 了
+  text = text.replace(/(\S[\s\S]*?)\s*\[@[^\]]+\]\(tg:\/\/user\?id=\d+\)\s*$/g, '$1').trim();
   const mdPattern = /\[@([^\]]+)\]\(tg:\/\/user\?id=(\d+)\)/g;
   if (!mdPattern.test(text)) return { text, parseMode: null };
   mdPattern.lastIndex = 0;
