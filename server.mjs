@@ -488,6 +488,7 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData
           body: JSON.stringify({
             model,
             max_tokens: parseInt(process.env.MAX_TOKENS ?? '800'),
+            stream: false,
             messages: apiMessages
           })
         });
