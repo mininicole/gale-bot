@@ -11,7 +11,7 @@ const API_KEY = process.env.API_KEY;
 const API_BASE = (process.env.API_BASE_URL || 'https://api.dzzi.ai').replace(/\/+$/, '');
 // API_MODEL 支持分号分隔的 fallback 链：主选;备选1;备选2...
 // 主选挂了（HTTP 错误/无内容）自动切下一个
-const API_MODELS = (process.env.API_MODEL || '[按量]gemini-3-pro-preview-128-nothinking')
+const API_MODELS = (process.env.API_MODEL || '[按量]gpt-5.5')
   .split(';').map(s => s.trim()).filter(Boolean);
 const TG_API = `https://api.telegram.org/bot${TG_TOKEN}`;
 let tgOffset = 0;
