@@ -149,11 +149,14 @@ async function loadTgHistoryFromGist() {
 }
 
 // 把 tgHistory 写回 gist 的 state.json（读-改-写，不动 trigger.py 的字段）
+// alsoPending=true 时一并写 pending_gale.json（一次 PATCH 原子落盘）
 let saveTgHistoryTimer = null;
 let saveTgHistoryInFlight = false;
-async function saveTgHistoryToGist() {
+async function saveTgHistoryToGist({ alsoPending = false } = {}) {
   if (!GIST_TOKEN || !STATE_GIST_URL) return;
   if (saveTgHistoryInFlight) return;
+  // alsoPending 时若懒加载未完成，先降级为只写 state.json，避免覆盖旧 pending
+  if (alsoPending && pendingLoadInFlight) alsoPending = false;
   saveTgHistoryInFlight = true;
   try {
     const gistId = STATE_GIST_URL.split('/')[4];
@@ -169,7 +172,17 @@ async function saveTgHistoryToGist() {
     const content = getData.files?.['state.json']?.content;
     const state = content ? JSON.parse(content) : {};
     state.tg_history_gale = tgHistory.slice(-40);
-    await fetch(`https://api.github.com/gists/${gistId}`, {
+
+    const files = { 'state.json': { content: JSON.stringify(state, null, 2) } };
+    let pendingSnapshot = null;
+    let pendingSnapLen = 0;
+    if (alsoPending) {
+      pendingSnapshot = groupHistory.slice();
+      pendingSnapLen = pendingSnapshot.length;
+      files['pending_gale.json'] = { content: JSON.stringify(pendingSnapshot, null, 2) };
+    }
+
+    const patchRes = await fetch(`https://api.github.com/gists/${gistId}`, {
       method: 'PATCH',
       headers: {
         'Authorization': `Bearer ${GIST_TOKEN}`,
@@ -177,11 +190,21 @@ async function saveTgHistoryToGist() {
         'Content-Type': 'application/json',
         'User-Agent': 'gale-server'
       },
-      body: JSON.stringify({
-        files: { 'state.json': { content: JSON.stringify(state, null, 2) } }
-      })
+      body: JSON.stringify({ files })
     });
-    console.log(`[Gale] tg_history已持久化 (${state.tg_history_gale.length}条)`);
+    if (!patchRes.ok) {
+      console.log(`[Gale] tg_history落盘失败 ${patchRes.status}`);
+      return;
+    }
+    if (alsoPending && pendingSnapshot) {
+      // copy-then-trim：只扣减 snapshot 长度，IO 期间新进来的不算落盘
+      pendingDirty = Math.max(0, pendingDirty - pendingSnapLen);
+      lastPendingFlush = Date.now();
+      if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = null; }
+      console.log(`[Gale] tg_history+pending已原子持久化 (tg=${state.tg_history_gale.length}, pending=${pendingSnapLen})`);
+    } else {
+      console.log(`[Gale] tg_history已持久化 (${state.tg_history_gale.length}条)`);
+    }
   } catch (e) {
     console.log(`[Gale] tg_history保存失败: ${e.message}`);
   } finally {
@@ -194,6 +217,120 @@ function scheduleTgHistorySave() {
     saveTgHistoryTimer = null;
     saveTgHistoryToGist();
   }, 3000);
+}
+
+// ===== 群消息 pending 持久化（"全局记忆"）=====
+// groupHistory 是被动旁听的滚动窗口（cap MAX_PENDING）；pending_gale.json 是它的覆盖式快照。
+// 触发落盘：dirty>=PENDING_THRESHOLD 或 距上次 flush > PENDING_INTERVAL_MS
+// bot 真触发回复时，会和 state.json 同一次 PATCH 一起写（见 saveTgHistoryToGist）
+const PENDING_THRESHOLD = 5;        // 攒够 5 条新群消息就写
+const PENDING_INTERVAL_MS = 90000;  // 或离上次 flush 90s
+const MAX_PENDING = 40;             // groupHistory 容量上限，溢出告警
+let pendingDirty = 0;               // 自上次落盘以来的新消息数
+let lastPendingFlush = 0;           // 上次落盘时间戳
+let pendingSaveInFlight = false;    // 防重入
+let pendingSaveTimer = null;        // 90s 定时器
+let pendingLoaded = false;          // 懒加载标记：第一次见群消息才从 gist 拉
+let pendingLoadInFlight = false;    // 防并发懒加载
+
+async function loadPendingFromGist() {
+  if (!GIST_TOKEN || !STATE_GIST_URL) { pendingLoaded = true; return; }
+  if (pendingLoaded || pendingLoadInFlight) return;
+  pendingLoadInFlight = true;
+  try {
+    const gistId = STATE_GIST_URL.split('/')[4];
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: {
+        'Authorization': `Bearer ${GIST_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'gale-server'
+      }
+    });
+    if (!res.ok) { pendingLoaded = true; return; }
+    const data = await res.json();
+    const content = data.files?.['pending_gale.json']?.content;
+    if (!content) {
+      console.log('[Gale] pending_gale.json 不存在，首次启动');
+      pendingLoaded = true;
+      return;
+    }
+    const saved = JSON.parse(content);
+    if (Array.isArray(saved) && saved.length) {
+      // 懒加载：本次会话期间可能已经累积了一些新消息，旧记忆 prepend 到前面
+      const fresh = groupHistory.splice(0, groupHistory.length);
+      groupHistory.push(...saved, ...fresh);
+      if (groupHistory.length > MAX_PENDING) {
+        groupHistory.splice(0, groupHistory.length - MAX_PENDING);
+      }
+      lastPendingFlush = Date.now();
+      console.log(`[Gale] 从pending_gale.json恢复groupHistory，共${groupHistory.length}条`);
+    }
+    pendingLoaded = true;
+  } catch (e) {
+    console.log(`[Gale] pending_gale.json 恢复失败: ${e.message}`);
+    pendingLoaded = true; // 失败也标记，免得每条消息都重试卡住
+  } finally {
+    pendingLoadInFlight = false;
+  }
+}
+
+// 单独写 pending_gale.json（不动 state.json）
+async function savePendingToGist() {
+  if (!GIST_TOKEN || !STATE_GIST_URL) return;
+  if (pendingSaveInFlight) return;
+  // 懒加载未完成前不写入：避免空快照覆盖 gist 上的旧记忆
+  if (pendingLoadInFlight) return;
+  pendingSaveInFlight = true;
+  try {
+    const snapshot = groupHistory.slice();      // copy-on-write 快照
+    const snapLen = snapshot.length;
+    const gistId = STATE_GIST_URL.split('/')[4];
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${GIST_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'gale-server'
+      },
+      body: JSON.stringify({
+        files: { 'pending_gale.json': { content: JSON.stringify(snapshot, null, 2) } }
+      })
+    });
+    if (!res.ok) {
+      console.log(`[Gale] pending落盘失败 ${res.status}`);
+      return;
+    }
+    // copy-then-trim：只扣减落盘成功的快照长度，期间新进来的还在 dirty 里
+    pendingDirty = Math.max(0, pendingDirty - snapLen);
+    lastPendingFlush = Date.now();
+    console.log(`[Gale] pending已落盘 (${snapLen}条)`);
+  } catch (e) {
+    console.log(`[Gale] pending落盘异常: ${e.message}`);
+  } finally {
+    pendingSaveInFlight = false;
+  }
+}
+
+// 触发器：阈值 OR 定时器（不阻塞调用方，异步发）
+function schedulePendingSave() {
+  if (pendingDirty >= PENDING_THRESHOLD) {
+    if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = null; }
+    savePendingToGist();
+    return;
+  }
+  if (pendingDirty > 0 && Date.now() - lastPendingFlush > PENDING_INTERVAL_MS) {
+    if (pendingSaveTimer) { clearTimeout(pendingSaveTimer); pendingSaveTimer = null; }
+    savePendingToGist();
+    return;
+  }
+  if (pendingDirty > 0 && !pendingSaveTimer) {
+    const remaining = Math.max(1000, PENDING_INTERVAL_MS - (Date.now() - lastPendingFlush));
+    pendingSaveTimer = setTimeout(() => {
+      pendingSaveTimer = null;
+      if (pendingDirty > 0) savePendingToGist();
+    }, remaining);
+  }
 }
 
 async function syncTriggerHistory() {
@@ -442,7 +579,7 @@ async function downloadTelegramPhoto(msg) {
 
 async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData = null } = {}) {
   const history = isGroup ? groupHistory : tgHistory;
-  const limit = isGroup ? 60 : 40;
+  const limit = isGroup ? MAX_PENDING : 40;
 
   if (!isGroup) await syncTriggerHistory();
   if (!skipPush) {
@@ -521,7 +658,19 @@ async function chatReply(userMsg, isGroup = false, { skipPush = false, imageData
     const cleanReply = rawReply.replace(/^\[语音\]\s*/, '');
     if (apiContent) {
       history.push({ role: 'assistant', content: cleanReply });
-      if (!isGroup) scheduleTgHistorySave();
+      if (isGroup) {
+        // 群聊：bot 自己的回复也算 dirty，借这次"反正都要 PATCH"原子写 pending
+        pendingDirty++;
+        if (history.length > limit) {
+          const overflow = history.length - limit;
+          console.warn(`[Gale][WARN] groupHistory缓冲溢出，丢弃${overflow}条旧消息（limit=${limit}）`);
+          history.splice(0, overflow);
+        }
+        // 不 await，不阻塞回包
+        saveTgHistoryToGist({ alsoPending: true });
+      } else {
+        scheduleTgHistorySave();
+      }
     }
     return rawReply;
   } catch (e) {
@@ -588,6 +737,8 @@ async function tgPoll() {
         const isFromOwner = OWNER_ID && fromUserId === OWNER_ID;
         const ownerReply = isGroup && isFromOwner && !isMentioned && !triggerHit &&
           (Math.random() < OWNER_PROB);
+        // 群聊有图必触发：绕过 @ / 关键词 / 概率 / 冷却（bot 来的图除外，防死循环）
+        const photoMustReply = isGroup && hasPhoto && !isFromBot;
 
         // 格式化消息（图片消息加 [图片] 标记，让 history 里能看出有图）
         const cleanText = isGroup ? textContent.replace(new RegExp(BOT_USERNAME, 'i'), '').trim() : textContent;
@@ -603,13 +754,19 @@ async function tgPoll() {
 
         // 被动旁听：群里所有消息都存入 groupHistory（不管会不会回复）
         if (isGroup && (cleanText || hasPhoto)) {
+          // 懒加载：第一次见群消息才从 gist 拉历史 pending（fire-and-forget，不阻塞）
+          if (!pendingLoaded) loadPendingFromGist();
           groupHistory.push({ role: 'user', content: cleanMsg });
-          if (groupHistory.length > 60) {
-            groupHistory.splice(0, groupHistory.length - 60);
+          if (groupHistory.length > MAX_PENDING) {
+            const overflow = groupHistory.length - MAX_PENDING;
+            console.warn(`[Gale][WARN] groupHistory缓冲溢出，丢弃${overflow}条旧消息（limit=${MAX_PENDING}）`);
+            groupHistory.splice(0, overflow);
           }
+          pendingDirty++;
+          schedulePendingSave();  // 攒满或 90s 触发后台落盘（不 await）
         }
 
-        if (isPrivate || (isGroup && mentionPass) || hasTriggerWord || randomReply || ownerReply) {
+        if (isPrivate || (isGroup && mentionPass) || hasTriggerWord || randomReply || ownerReply || photoMustReply) {
           if (hasTriggerWord || randomReply || ownerReply) lastAutoReplyTime = now;
           processed.add(msg.message_id);
           if (processed.size > 100) {
@@ -620,12 +777,15 @@ async function tgPoll() {
           if (hasPhoto) {
             imageData = await downloadTelegramPhoto(msg);
           }
+          // 调 Claude 前先 best-effort 落一次 pending：长 IO 期间被 SIGKILL 也不丢
+          if (isGroup && pendingDirty > 0) savePendingToGist();
           // 群聊消息已被动入库，跳过 chatReply 里的 push；私聊正常 push
           const reply = await chatReply(cleanMsg, isGroup, { skipPush: isGroup, imageData });
-          // 方案B：@必引用，触发词60%引用，随机插嘴/私聊不引用
+          // 方案B：@必引用，触发词60%引用，图片必触发也引用，随机插嘴/私聊不引用
           let replyToMessageId = null;
           if (isGroup && mentionPass) replyToMessageId = msg.message_id;
           else if (hasTriggerWord && Math.random() < 0.6) replyToMessageId = msg.message_id;
+          else if (photoMustReply) replyToMessageId = msg.message_id;
           await sendReply(reply, msg.chat.id, replyToMessageId, isGroup);
           // 回复了 bot 就记一笔，60 秒内不再回同一个 bot（防死循环）
           if (isFromBot && fromUserId) botReplyCooldown.set(fromUserId, Date.now());
@@ -669,6 +829,32 @@ async function testTTS() {
   }
   console.log('[Gale] === TTS 自测完成 ===');
 }
+
+// SIGTERM/SIGINT 兜底：进程被关之前最后 best-effort flush 一次（最多等 2s）
+let _shuttingDown = false;
+async function _flushAllOnSignal(sig) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  console.log(`[Gale] 收到 ${sig}，最后 flush（2s 超时）...`);
+  const flush = (async () => {
+    try {
+      if (pendingDirty > 0) await savePendingToGist();
+      if (saveTgHistoryTimer) {
+        clearTimeout(saveTgHistoryTimer);
+        saveTgHistoryTimer = null;
+        await saveTgHistoryToGist();
+      }
+    } catch (e) {
+      console.log(`[Gale] shutdown flush 异常: ${e.message}`);
+    }
+  })();
+  const timeout = new Promise(r => setTimeout(r, 2000));
+  await Promise.race([flush, timeout]);
+  console.log('[Gale] shutdown flush 结束，退出');
+  process.exit(0);
+}
+process.on('SIGTERM', () => _flushAllOnSignal('SIGTERM'));
+process.on('SIGINT',  () => _flushAllOnSignal('SIGINT'));
 
 server.listen(PORT, () => {
   console.log(`Gale bot on port ${PORT}`);
